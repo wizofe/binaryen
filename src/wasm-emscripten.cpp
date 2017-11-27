@@ -156,21 +156,7 @@ static bool hasI64ResultOrParam(FunctionType* ft) {
   return false;
 }
 
-void removeImportsWithSubstring(Module& module, Name name) {
-  std::vector<Name> toRemove;
-  for (auto& import : module.imports) {
-    if (import->name.hasSubstring(name)) {
-      toRemove.push_back(import->name);
-    }
-  }
-  for (auto importName : toRemove) {
-    module.removeImport(importName);
-  }
-}
-
 void EmscriptenGlueGenerator::generateDynCallThunks() {
-  removeImportsWithSubstring(wasm, EMSCRIPTEN_ASM_CONST); // we create _sig versions
-
   std::unordered_set<std::string> sigs;
   Builder builder(wasm);
   std::vector<Name> tableSegmentData;
@@ -231,7 +217,7 @@ private:
 };
 
 void AsmConstWalker::visitCallImport(CallImport* curr) {
-  auto import = wasm.getImport(curr->target);
+  Import* import = wasm.getImport(curr->target);
   if (import->base.hasSubstring(EMSCRIPTEN_ASM_CONST)) {
     auto arg = curr->operands[0]->cast<Const>();
     auto code = codeForConstAddr(arg);
@@ -318,6 +304,31 @@ void AsmConstWalker::addImport(Name importName, std::string baseSig) {
   wasm.addImport(import);
 }
 
+AsmConstWalker fixEmAsmConstsAndReturnWalker(Module& wasm) {
+  // Collect imports to remove
+  // This would find our generated functions if we ran it later
+  std::vector<Name> toRemove;
+  for (auto& import : wasm.imports) {
+    if (import->base.hasSubstring(EMSCRIPTEN_ASM_CONST)) {
+      toRemove.push_back(import->name);
+    }
+  }
+
+  // Walk the module, generate _sig versions of EM_ASM functions
+  AsmConstWalker walker(wasm);
+  walker.walkModule(&wasm);
+
+  // Remove the base functions that we didn't generate
+  for (auto importName : toRemove) {
+    wasm.removeImport(importName);
+  }
+  return walker;
+}
+
+void EmscriptenGlueGenerator::fixEmAsmConsts() {
+  fixEmAsmConstsAndReturnWalker(wasm);
+}
+
 template<class C>
 void printSet(std::ostream& o, C& c) {
   o << "[";
@@ -336,9 +347,7 @@ std::string EmscriptenGlueGenerator::generateEmscriptenMetadata(
   std::stringstream meta;
   meta << ";; METADATA: { ";
 
-  // find asmConst calls, and emit their metadata
-  AsmConstWalker walker(wasm);
-  walker.walkModule(&wasm);
+  AsmConstWalker walker = fixEmAsmConstsAndReturnWalker(wasm);
 
   // print
   meta << "\"asmConsts\": {";
