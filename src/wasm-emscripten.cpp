@@ -345,7 +345,7 @@ std::string EmscriptenGlueGenerator::generateEmscriptenMetadata(
     Address staticBump,
     std::vector<Name> const& initializerFunctions) {
   std::stringstream meta;
-  meta << ";; METADATA: { ";
+  meta << "{ ";
 
   AsmConstWalker walker = fixEmAsmConstsAndReturnWalker(wasm);
 
