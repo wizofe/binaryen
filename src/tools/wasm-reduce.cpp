@@ -394,37 +394,67 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
 
   void visitModule(Module* curr) {
     // try to remove exports
-    std::cerr << "|    try to remove exports\n";
+    std::cerr << "|    try to remove exports (with factor " << factor << ")\n";
     std::vector<Export> exports;
     for (auto& exp : curr->exports) {
-      if (!shouldTryToReduce(10000)) continue;
       exports.push_back(*exp);
     }
     for (auto& exp : exports) {
       curr->removeExport(exp.name);
-      if (!writeAndTestReduction()) {
+      ProgramResult result;
+      if (!writeAndTestReduction(result)) {
         curr->addExport(new Export(exp));
       } else {
         std::cerr << "|      removed export " << exp.name << '\n';
         noteReduction();
+        // perhaps we can remove the function too
+        tryToRemoveFunctions({ exp.value }, curr);
       }
     }
     // try to remove functions
     std::cerr << "|    try to remove functions\n";
-    std::vector<Function> functions;
+    std::vector<Name> functionNames;
     for (auto& func : curr->functions) {
-      if (!shouldTryToReduce(10000)) continue;
-      functions.push_back(*func);
+      functionNames.push_back(func->name);
     }
-    for (auto& func : functions) {
-      curr->removeFunction(func.name);
-      if (WasmValidator().validate(*curr, Feature::MVP, WasmValidator::Globally | WasmValidator::Quiet) &&
-          writeAndTestReduction()) {
-        std::cerr << "|      removed function " << func.name << '\n';
-        noteReduction();
-      } else {
-        curr->addFunction(new Function(func));
+    size_t skip = 1;
+    for (size_t i = 0; i < functionNames.size(); i++) {
+      if (!shouldTryToReduce(10000)) continue;
+      std::vector<Name> names;
+      for (size_t j = 0; names.size() < skip && i + j < functionNames.size(); j++) {
+        auto name = functionNames[i + j];
+        if (curr->getFunctionOrNull(name)) {
+          names.push_back(name);
+        }
       }
+      if (tryToRemoveFunctions(names, curr)) {
+        skip = std::min(size_t(factor), 2 * skip);
+        std::cout << "|        (skip: " << skip << ")\n";
+      }
+    }
+  }
+
+  bool tryToRemoveFunctions(std::vector<Name> names, Module* module) {
+    std::vector<Function> funcs;
+    for (auto name : names) {
+      Function func = *module->getFunction(name);
+      funcs.push_back(func);
+      module->removeFunction(func.name);
+    }
+    if (WasmValidator().validate(*module, Feature::MVP, WasmValidator::Globally | WasmValidator::Quiet) &&
+        writeAndTestReduction()) {
+      std::cerr << "|      removed functions: ";
+      for (auto name : names) {
+        noteReduction();
+        std::cerr << name << ' ';
+      }
+      std::cerr << '\n';
+      return true;
+    } else {
+      for (auto& func : funcs) {
+        module->addFunction(new Function(func));
+      }
+      return false;
     }
   }
 
@@ -545,6 +575,7 @@ int main(int argc, const char* argv[]) {
   if (test.size() == 0) Fatal() << "test file not provided\n";
   if (working.size() == 0) Fatal() << "working file not provided\n";
 
+  std::cerr << "|wasm-reduce\n";
   std::cerr << "|input: " << input << '\n';
   std::cerr << "|test: " << test << '\n';
   std::cerr << "|working: " << working << '\n';
@@ -589,11 +620,12 @@ int main(int argc, const char* argv[]) {
   }
 
   copy_file(input, working);
-  std::cerr << "|input size: " << file_size(working) << "\n";
+  auto workingSize = file_size(working);
+  std::cerr << "|input size: " << workingSize << "\n";
 
   std::cerr << "|starting reduction!\n";
 
-  int factor = 4096;
+  int factor = workingSize;
   size_t lastDestructiveReductions = 0;
   size_t lastPostPassesSize = 0;
 
