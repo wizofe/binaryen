@@ -426,7 +426,7 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
     }
     size_t skip = 1;
     for (size_t i = 0; i < functionNames.size(); i++) {
-      if (!shouldTryToReduce(10000)) continue;
+      if (!shouldTryToReduce((factor / 10) + 1)) continue;
       std::vector<Name> names;
       for (size_t j = 0; names.size() < skip && i + j < functionNames.size(); j++) {
         auto name = functionNames[i + j];
@@ -436,8 +436,10 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
       }
       if (tryToRemoveFunctions(names)) {
         skip = std::min(size_t(factor), 2 * skip);
-        std::cout << "|        (skip: " << skip << ")\n";
+      } else {
+        skip = (skip / 2) + 1;
       }
+      std::cout << "|        (new skip: " << skip << ")\n";
     }
   }
 
@@ -485,12 +487,7 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
 
     if (WasmValidator().validate(*module, Feature::MVP, WasmValidator::Globally | WasmValidator::Quiet) &&
         writeAndTestReduction()) {
-      std::cerr << "|      removed functions: ";
-      for (auto name : names) {
-        noteReduction();
-        std::cerr << name << ' ';
-      }
-      std::cerr << '\n';
+      std::cerr << "|      removed " << names.size() << " functions\n";
       return true;
     } else {
       loadWorking(); // restore it from orbit
