@@ -171,28 +171,34 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
   //               from the start
   size_t reduceDestructively(int factor_) {
     factor = factor_;
-    Module wasm;
-    ModuleReader reader;
-    reader.read(working, wasm);
     // prepare
+    loadWorking();
     reduced = 0;
-    builder = make_unique<Builder>(wasm);
     funcsSeen = 0;
     // before we do any changes, it should be valid to write out the module:
     // size should be as expected, and output should be as expected
-    setModule(&wasm);
     if (!writeAndTestReduction()) {
       std::cerr << "\n|! WARNING: writing before destructive reduction fails, very unlikely reduction can work\n\n";
     }
     // destroy!
-    walkModule(&wasm);
+    walkModule(getModule());
     return reduced;
+  }
+
+  void loadWorking() {
+    module = make_unique<Module>();
+    Module wasm;
+    ModuleReader reader;
+    reader.read(working, *module);
+    builder = make_unique<Builder>(*module);
+    setModule(module.get());
   }
 
   // destructive reduction state
 
   size_t reduced;
   Expression* beforeReduction;
+  std::unique_ptr<Module> module;
   std::unique_ptr<Builder> builder;
   Index funcsSeen;
   int factor;
@@ -393,28 +399,29 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
   }
 
   void visitModule(Module* curr) {
+    assert(curr == module.get());
     // try to remove exports
     std::cerr << "|    try to remove exports (with factor " << factor << ")\n";
     std::vector<Export> exports;
-    for (auto& exp : curr->exports) {
+    for (auto& exp : module->exports) {
       exports.push_back(*exp);
     }
     for (auto& exp : exports) {
-      curr->removeExport(exp.name);
+      module->removeExport(exp.name);
       ProgramResult result;
       if (!writeAndTestReduction(result)) {
-        curr->addExport(new Export(exp));
+        module->addExport(new Export(exp));
       } else {
         std::cerr << "|      removed export " << exp.name << '\n';
         noteReduction();
         // perhaps we can remove the function too
-        tryToRemoveFunctions({ exp.value }, curr);
+        tryToRemoveFunctions({ exp.value });
       }
     }
     // try to remove functions
     std::cerr << "|    try to remove functions\n";
     std::vector<Name> functionNames;
-    for (auto& func : curr->functions) {
+    for (auto& func : module->functions) {
       functionNames.push_back(func->name);
     }
     size_t skip = 1;
@@ -423,23 +430,20 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
       std::vector<Name> names;
       for (size_t j = 0; names.size() < skip && i + j < functionNames.size(); j++) {
         auto name = functionNames[i + j];
-        if (curr->getFunctionOrNull(name)) {
+        if (module->getFunctionOrNull(name)) {
           names.push_back(name);
         }
       }
-      if (tryToRemoveFunctions(names, curr)) {
+      if (tryToRemoveFunctions(names)) {
         skip = std::min(size_t(factor), 2 * skip);
         std::cout << "|        (skip: " << skip << ")\n";
       }
     }
   }
 
-  bool tryToRemoveFunctions(std::vector<Name> names, Module* module) {
-    std::vector<Function> funcs;
+  bool tryToRemoveFunctions(std::vector<Name> names) {
     for (auto name : names) {
-      Function func = *module->getFunction(name);
-      funcs.push_back(func);
-      module->removeFunction(func.name);
+      module->removeFunction(name);
     }
     if (WasmValidator().validate(*module, Feature::MVP, WasmValidator::Globally | WasmValidator::Quiet) &&
         writeAndTestReduction()) {
@@ -451,9 +455,7 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
       std::cerr << '\n';
       return true;
     } else {
-      for (auto& func : funcs) {
-        module->addFunction(new Function(func));
-      }
+      loadWorking(); // restore it from orbit
       return false;
     }
   }
