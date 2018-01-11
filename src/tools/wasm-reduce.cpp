@@ -246,8 +246,8 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
     return true;
   }
 
-  void noteReduction() {
-    reduced++;
+  void noteReduction(size_t amount = 1) {
+    reduced += amount;
     copy_file(test, working);
   }
 
@@ -426,7 +426,7 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
     }
     size_t skip = 1;
     for (size_t i = 0; i < functionNames.size(); i++) {
-      if (!shouldTryToReduce((factor / 10) + 1)) continue;
+      if (!shouldTryToReduce(std::max((factor / 100) + 1, 10000))) continue;
       std::vector<Name> names;
       for (size_t j = 0; names.size() < skip && i + j < functionNames.size(); j++) {
         auto name = functionNames[i + j];
@@ -434,10 +434,12 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
           names.push_back(name);
         }
       }
+      if (names.size() == 0) continue;
       if (tryToRemoveFunctions(names)) {
+        noteReduction(names.size());
         skip = std::min(size_t(factor), 2 * skip);
       } else {
-        skip = (skip / 2) + 1;
+        skip = std::max(skip / 2, size_t(1)); // or 1?
       }
       std::cout << "|        (new skip: " << skip << ")\n";
     }
