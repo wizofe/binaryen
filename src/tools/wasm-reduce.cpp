@@ -445,6 +445,44 @@ struct Reducer : public WalkerPass<PostWalker<Reducer, UnifiedExpressionVisitor<
     for (auto name : names) {
       module->removeFunction(name);
     }
+
+    // remove all references to them
+    struct FunctionReferenceRemover : public PostWalker<FunctionReferenceRemover> {
+      std::unordered_set<Name> names;
+      FunctionReferenceRemover(std::vector<Name>& vec) {
+        for (auto name : vec) {
+          names.insert(name);
+        }
+      }
+      void visitCall(Call* curr) {
+        if (names.count(curr->target)) {
+          replaceCurrent(Builder(*getModule()).replaceWithIdenticalType(curr));
+        }
+      }
+      void visitTable(Table* curr) {
+        Name other;
+        for (auto& segment : curr->segments) {
+          for (auto name : segment.data) {
+            if (!names.count(name)) {
+              other = name;
+              break;
+            }
+          }
+          if (!other.isNull()) break;
+        }
+        if (other.isNull()) return; // we failed to find a replacement
+        for (auto& segment : curr->segments) {
+          for (auto& name : segment.data) {
+            if (names.count(name)) {
+              name = other;
+            }
+          }
+        }
+      }
+    };
+    FunctionReferenceRemover referenceRemover(names);
+    referenceRemover.walkModule(module.get());
+
     if (WasmValidator().validate(*module, Feature::MVP, WasmValidator::Globally | WasmValidator::Quiet) &&
         writeAndTestReduction()) {
       std::cerr << "|      removed functions: ";
